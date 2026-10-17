@@ -11,36 +11,50 @@ permissions:
 
 jobs:
   build:
+    name: Build WRP Android APK
     runs-on: ubuntu-latest
     timeout-minutes: 30
 
     steps:
-      - name: Checkout
+      - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Setup Java
+      - name: Set up Java 17
         uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: '17'
 
-      - name: Setup Android
-        uses: android-actions/setup-android@v3
-
-      - name: Install Android SDK 35
+      # Use the preinstalled Android SDK.
+      # Avoid setup-android@v3 and its obsolete tools package.
+      - name: Prepare Android SDK 35
+        shell: bash
         run: |
-          sdkmanager "platforms;android-35" "build-tools;35.0.0"
+          set -euo pipefail
+          SDK="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-/usr/local/lib/android/sdk}}"
+          echo "ANDROID_HOME=$SDK" >> "$GITHUB_ENV"
+          echo "Using Android SDK at $SDK"
 
-      - name: Setup Gradle
+          if [ ! -f "$SDK/platforms/android-35/android.jar" ] || [ ! -x "$SDK/build-tools/35.0.0/aapt2" ]; then
+            MANAGER="$SDK/cmdline-tools/latest/bin/sdkmanager"
+            test -x "$MANAGER" || { echo "Android sdkmanager not found"; exit 1; }
+            "$MANAGER" --sdk_root="$SDK" --install \
+              'platforms;android-35' 'build-tools;35.0.0'
+          fi
+
+          test -f "$SDK/platforms/android-35/android.jar"
+          test -x "$SDK/build-tools/35.0.0/aapt2"
+          echo 'Android SDK 35 is ready.'
+
+      - name: Set up Gradle 8.9
         uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '8.9'
 
-      - name: Generate WRP Android Source
+      - name: Create WRP starter source
         shell: bash
         run: |
-          set -e
-
+          set -euo pipefail
           mkdir -p app/src/main/java/mm/wrp/project
 
           cat > settings.gradle <<'EOF'
@@ -68,6 +82,11 @@ jobs:
           }
           EOF
 
+          cat > gradle.properties <<'EOF'
+          org.gradle.jvmargs=-Xmx2048m -Dfile.encoding=UTF-8
+          android.useAndroidX=true
+          EOF
+
           cat > app/build.gradle <<'EOF'
           plugins {
               id 'com.android.application'
@@ -82,7 +101,7 @@ jobs:
                   minSdk 24
                   targetSdk 35
                   versionCode 1
-                  versionName '0.1'
+                  versionName '0.1.0'
               }
 
               compileOptions {
@@ -95,17 +114,16 @@ jobs:
           cat > app/src/main/AndroidManifest.xml <<'EOF'
           <?xml version="1.0" encoding="utf-8"?>
           <manifest xmlns:android="http://schemas.android.com/apk/res/android">
-              <uses-permission android:name="android.permission.INTERNET"/>
+              <uses-permission android:name="android.permission.INTERNET" />
               <application
                   android:label="WRP"
-                  android:theme="@android:style/Theme.Material.Light.NoActionBar"
-                  android:usesCleartextTraffic="false">
-                  <activity
-                      android:name=".MainActivity"
-                      android:exported="true">
+                  android:allowBackup="false"
+                  android:usesCleartextTraffic="false"
+                  android:theme="@android:style/Theme.Material.Light.NoActionBar">
+                  <activity android:name=".MainActivity" android:exported="true">
                       <intent-filter>
-                          <action android:name="android.intent.action.MAIN"/>
-                          <category android:name="android.intent.category.LAUNCHER"/>
+                          <action android:name="android.intent.action.MAIN" />
+                          <category android:name="android.intent.category.LAUNCHER" />
                       </intent-filter>
                   </activity>
               </application>
@@ -118,11 +136,13 @@ jobs:
           import android.app.Activity;
           import android.os.Bundle;
           import android.graphics.Color;
-          import android.view.ViewGroup;
           import android.widget.*;
           import org.json.JSONObject;
-          import java.net.*;
-          import java.io.*;
+          import java.net.HttpURLConnection;
+          import java.net.URL;
+          import java.io.InputStream;
+          import java.io.OutputStream;
+          import java.io.ByteArrayOutputStream;
           import java.nio.charset.StandardCharsets;
           import java.util.UUID;
 
@@ -130,107 +150,105 @@ jobs:
               @Override
               public void onCreate(Bundle state) {
                   super.onCreate(state);
-
-                  LinearLayout panel = new LinearLayout(this);
-                  panel.setOrientation(LinearLayout.VERTICAL);
-                  panel.setPadding(36, 60, 36, 20);
-                  panel.setBackgroundColor(Color.WHITE);
+                  LinearLayout view = new LinearLayout(this);
+                  view.setOrientation(LinearLayout.VERTICAL);
+                  view.setPadding(32, 48, 32, 24);
+                  view.setBackgroundColor(Color.WHITE);
 
                   TextView title = new TextView(this);
                   title.setText("WRP");
-                  title.setTextSize(34);
-                  title.setTextColor(Color.rgb(20, 55, 110));
-                  panel.addView(title);
+                  title.setTextSize(36);
+                  title.setTextColor(Color.rgb(20, 58, 120));
+                  view.addView(title);
 
-                  TextView subtitle = new TextView(this);
-                  subtitle.setText("Secure Activation Starter");
-                  subtitle.setTextSize(16);
-                  panel.addView(subtitle);
+                  TextView sub = new TextView(this);
+                  sub.setText("Activation Starter");
+                  view.addView(sub);
 
-                  EditText url = new EditText(this);
-                  url.setHint("https://your-server.example");
-                  url.setSingleLine(true);
-                  panel.addView(url);
+                  EditText server = new EditText(this);
+                  server.setSingleLine(true);
+                  server.setHint("https://your-server.example");
+                  view.addView(server);
 
                   EditText key = new EditText(this);
-                  key.setHint("Activation Key");
                   key.setSingleLine(true);
-                  panel.addView(key);
+                  key.setHint("Activation key");
+                  view.addView(key);
 
                   Button button = new Button(this);
                   button.setText("ACTIVATE WRP");
-                  panel.addView(button);
+                  view.addView(button);
 
                   TextView status = new TextView(this);
-                  status.setText("Enter server URL and activation key.");
-                  status.setPadding(0, 24, 0, 0);
-                  panel.addView(status);
-
-                  setContentView(panel);
+                  status.setText("Enter your HTTPS server and key.");
+                  view.addView(status);
+                  setContentView(view);
 
                   button.setOnClickListener(v -> {
-                      String base = url.getText().toString().trim();
+                      String base = server.getText().toString().trim();
                       String code = key.getText().toString().trim();
-
                       if (!base.startsWith("https://") || code.isEmpty()) {
-                          status.setText("HTTPS URL and key required.");
+                          status.setText("HTTPS server and key required.");
                           return;
                       }
-
                       button.setEnabled(false);
                       status.setText("Checking activation...");
 
                       new Thread(() -> {
-                          String message;
+                          String result = "Activation failed.";
                           HttpURLConnection conn = null;
-
                           try {
-                              String id = getPreferences(MODE_PRIVATE)
-                                  .getString("deviceId", null);
-
-                              if (id == null) {
-                                  id = UUID.randomUUID().toString();
+                              String deviceId = getPreferences(MODE_PRIVATE)
+                                      .getString("device_id", null);
+                              if (deviceId == null) {
+                                  deviceId = UUID.randomUUID().toString();
                                   getPreferences(MODE_PRIVATE).edit()
-                                      .putString("deviceId", id).apply();
+                                          .putString("device_id", deviceId).apply();
                               }
-
-                              URL endpoint = new URL(
-                                  base.replaceAll("/+$", "") + "/api/activate"
-                              );
-
-                              conn = (HttpURLConnection) endpoint.openConnection();
+                              String endpoint = base.replaceAll("/+$", "") + "/api/activate";
+                              conn = (HttpURLConnection) new URL(endpoint).openConnection();
                               conn.setRequestMethod("POST");
-                              conn.setDoOutput(true);
                               conn.setConnectTimeout(10000);
                               conn.setReadTimeout(10000);
-                              conn.setRequestProperty(
-                                  "Content-Type", "application/json"
-                              );
-
+                              conn.setDoOutput(true);
+                              conn.setRequestProperty("Content-Type", "application/json");
                               JSONObject request = new JSONObject();
                               request.put("key", code);
-                              request.put("deviceId", id);
-
-                              try (OutputStream out = conn.getOutputStream()) {
-                                  out.write(request.toString().getBytes(
-                                      StandardCharsets.UTF_8
-                                  ));
+                              request.put("deviceId", deviceId);
+                              try (OutputStream output = conn.getOutputStream()) {
+                                  output.write(request.toString()
+                                          .getBytes(StandardCharsets.UTF_8));
                               }
-
-                              if (conn.getResponseCode() == 200) {
-                                  message = "Server accepted activation.";
-                              } else {
-                                  message = "Activation rejected by server.";
+                              int httpCode = conn.getResponseCode();
+                              InputStream input = httpCode == 200
+                                      ? conn.getInputStream() : conn.getErrorStream();
+                              if (input != null) {
+                                  try (InputStream in = input;
+                                       ByteArrayOutputStream bytes = new ByteArrayOutputStream()) {
+                                      byte[] chunk = new byte[1024];
+                                      int size;
+                                      while ((size = in.read(chunk)) != -1) {
+                                          bytes.write(chunk, 0, size);
+                                          if (bytes.size() > 65536) break;
+                                      }
+                                      JSONObject response = new JSONObject(
+                                              new String(bytes.toByteArray(),
+                                                      StandardCharsets.UTF_8));
+                                      if (httpCode == 200 && response.optBoolean("ok", false)) {
+                                          result = "WRP activated successfully.";
+                                      } else {
+                                          result = "Server rejected activation.";
+                                      }
+                                  }
                               }
                           } catch (Exception e) {
-                              message = "Connection failed. Check backend.";
+                              result = "Connection failed. Check backend URL.";
                           } finally {
                               if (conn != null) conn.disconnect();
                           }
-
-                          String result = message;
+                          String message = result;
                           runOnUiThread(() -> {
-                              status.setText(result);
+                              status.setText(message);
                               button.setEnabled(true);
                           });
                       }).start();
@@ -239,9 +257,8 @@ jobs:
           }
           EOF
 
-      - name: Build WRP APK
-        run: |
-          gradle --no-daemon :app:assembleDebug
+      - name: Build WRP debug APK
+        run: gradle --no-daemon --stacktrace :app:assembleDebug
 
       - name: Upload WRP APK
         uses: actions/upload-artifact@v4
