@@ -1,5 +1,5 @@
 
-name: WRP APK + Source (No Upload)
+name: WRP v0.2 Android APK Build
 
 on:
   workflow_dispatch:
@@ -11,51 +11,40 @@ permissions:
 
 jobs:
   build:
-    name: Build WRP Android APK
     runs-on: ubuntu-24.04
-    timeout-minutes: 30
+    timeout-minutes: 35
 
     steps:
-      - name: Checkout repository
+      - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Set up Java 17
+      - name: Setup Java
         uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: '17'
 
-      - name: Prepare Android SDK 35
+      - name: Setup Android SDK
         shell: bash
         run: |
-          set -euo pipefail
-          SDK="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-/usr/local/lib/android/sdk}}"
+          set -e
+          SDK="${ANDROID_HOME:-/usr/local/lib/android/sdk}"
           echo "ANDROID_HOME=$SDK" >> "$GITHUB_ENV"
-          echo "Using Android SDK at $SDK"
-
-          if [ ! -f "$SDK/platforms/android-35/android.jar" ] || [ ! -x "$SDK/build-tools/35.0.0/aapt2" ]; then
-            MANAGER="$SDK/cmdline-tools/latest/bin/sdkmanager"
-            test -x "$MANAGER" || {
-              echo "Android sdkmanager not found"
-              exit 1
-            }
-            "$MANAGER" --sdk_root="$SDK" --install \
-              'platforms;android-35' 'build-tools;35.0.0'
+          if [ ! -f "$SDK/platforms/android-35/android.jar" ]; then
+            "$SDK/cmdline-tools/latest/bin/sdkmanager" \
+              --sdk_root="$SDK" \
+              --install 'platforms;android-35' 'build-tools;35.0.0'
           fi
 
-          test -f "$SDK/platforms/android-35/android.jar"
-          test -x "$SDK/build-tools/35.0.0/aapt2"
-          echo 'Android SDK 35 is ready.'
-
-      - name: Set up Gradle 8.9
+      - name: Setup Gradle
         uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '8.9'
 
-      - name: Create WRP starter source
+      - name: Generate Android Project
         shell: bash
         run: |
-          set -euo pipefail
+          set -e
           mkdir -p app/src/main/java/mm/wrp/project
 
           cat > settings.gradle <<'EOF'
@@ -98,11 +87,11 @@ jobs:
               compileSdk 35
 
               defaultConfig {
-                  applicationId 'mm.wrp.project'
+                  applicationId 'mm.wrp.project.beta'
                   minSdk 24
                   targetSdk 35
-                  versionCode 1
-                  versionName '0.1.0'
+                  versionCode 2
+                  versionName '0.2.0-beta'
               }
 
               compileOptions {
@@ -115,199 +104,655 @@ jobs:
           cat > app/src/main/AndroidManifest.xml <<'EOF'
           <?xml version="1.0" encoding="utf-8"?>
           <manifest xmlns:android="http://schemas.android.com/apk/res/android">
-              <uses-permission android:name="android.permission.INTERNET" />
+
+              <uses-permission android:name="android.permission.INTERNET"/>
+
+              <queries>
+                  <package android:name="org.telegram.messenger"/>
+                  <package android:name="org.thunderdog.challegram"/>
+              </queries>
+
               <application
-                  android:label="WRP"
+                  android:label="WRP v0.2"
                   android:allowBackup="false"
                   android:usesCleartextTraffic="false"
                   android:theme="@android:style/Theme.Material.Light.NoActionBar">
-                  <activity android:name=".MainActivity" android:exported="true">
+
+                  <activity
+                      android:name=".MainActivity"
+                      android:exported="true">
+
                       <intent-filter>
-                          <action android:name="android.intent.action.MAIN" />
-                          <category android:name="android.intent.category.LAUNCHER" />
+                          <action android:name="android.intent.action.MAIN"/>
+                          <category android:name="android.intent.category.LAUNCHER"/>
                       </intent-filter>
+
                   </activity>
               </application>
           </manifest>
+          EOF
+
+          cat > app/src/main/java/mm/wrp/project/SecureStore.java <<'EOF'
+          package mm.wrp.project;
+
+          import android.content.Context;
+          import android.content.SharedPreferences;
+          import android.security.keystore.KeyGenParameterSpec;
+          import android.security.keystore.KeyProperties;
+          import android.util.Base64;
+          import java.nio.charset.StandardCharsets;
+          import java.security.KeyStore;
+          import javax.crypto.Cipher;
+          import javax.crypto.KeyGenerator;
+          import javax.crypto.SecretKey;
+          import javax.crypto.spec.GCMParameterSpec;
+
+          final class SecureStore {
+              private static final String ALIAS = "wrp_v02_activation_aes";
+              private static final String PREF = "license_blob";
+              private final SharedPreferences prefs;
+
+              SecureStore(Context context) {
+                  prefs = context.getSharedPreferences(
+                      "wrp_secure", Context.MODE_PRIVATE);
+              }
+
+              private SecretKey key() throws Exception {
+                  KeyStore store = KeyStore.getInstance("AndroidKeyStore");
+                  store.load(null);
+
+                  if (store.containsAlias(ALIAS)) {
+                      return (SecretKey) store.getKey(ALIAS, null);
+                  }
+
+                  KeyGenerator generator = KeyGenerator.getInstance(
+                      "AES", "AndroidKeyStore");
+
+                  generator.init(
+                      new KeyGenParameterSpec.Builder(
+                          ALIAS,
+                          KeyProperties.PURPOSE_ENCRYPT |
+                          KeyProperties.PURPOSE_DECRYPT)
+                          .setBlockModes(KeyProperties.BLOCK_MODE_GCM)
+                          .setEncryptionPaddings(
+                              KeyProperties.ENCRYPTION_PADDING_NONE)
+                          .setRandomizedEncryptionRequired(true)
+                          .setKeySize(256)
+                          .build()
+                  );
+
+                  return generator.generateKey();
+              }
+
+              void put(String plain) throws Exception {
+                  Cipher cipher = Cipher.getInstance("AES/GCM/NoPadding");
+                  cipher.init(Cipher.ENCRYPT_MODE, key());
+
+                  byte[] data = cipher.doFinal(
+                      plain.getBytes(StandardCharsets.UTF_8));
+
+                  String iv = Base64.encodeToString(
+                      cipher.getIV(), Base64.NO_WRAP);
+                  String encrypted = Base64.encodeToString(
+                      data, Base64.NO_WRAP);
+
+                  prefs.edit().putString(
+                      PREF, iv + "." + encrypted).apply();
+              }
+
+              String get() {
+                  String value = prefs.getString(PREF, null);
+                  if (value == null) return null;
+
+                  try {
+                      String[] parts = value.split("\\.", -1);
+                      if (parts.length != 2) return null;
+
+                      Cipher cipher = Cipher.getInstance(
+                          "AES/GCM/NoPadding");
+
+                      cipher.init(
+                          Cipher.DECRYPT_MODE,
+                          key(),
+                          new GCMParameterSpec(
+                              128,
+                              Base64.decode(parts[0], Base64.NO_WRAP))
+                      );
+
+                      return new String(
+                          cipher.doFinal(Base64.decode(
+                              parts[1], Base64.NO_WRAP)),
+                          StandardCharsets.UTF_8);
+
+                  } catch (Exception e) {
+                      clear();
+                      return null;
+                  }
+              }
+
+              void clear() {
+                  prefs.edit().remove(PREF).apply();
+              }
+          }
           EOF
 
           cat > app/src/main/java/mm/wrp/project/MainActivity.java <<'EOF'
           package mm.wrp.project;
 
           import android.app.Activity;
-          import android.os.Bundle;
+          import android.app.AlertDialog;
+          import android.content.Intent;
+          import android.content.SharedPreferences;
           import android.graphics.Color;
-          import android.widget.*;
+          import android.net.Uri;
+          import android.os.Bundle;
+          import android.text.InputType;
+          import android.view.View;
+          import android.widget.Button;
+          import android.widget.EditText;
+          import android.widget.LinearLayout;
+          import android.widget.ScrollView;
+          import android.widget.TextView;
+          import org.json.JSONArray;
           import org.json.JSONObject;
-          import java.net.HttpURLConnection;
-          import java.net.URL;
+          import java.io.ByteArrayOutputStream;
           import java.io.InputStream;
           import java.io.OutputStream;
-          import java.io.ByteArrayOutputStream;
+          import java.net.HttpURLConnection;
+          import java.net.URL;
           import java.nio.charset.StandardCharsets;
           import java.util.UUID;
 
           public class MainActivity extends Activity {
+
+              private static final String DEFAULT_SERVER =
+                  "https://wrp-projectmm.onrender.com";
+
+              private SharedPreferences prefs;
+              private SecureStore secrets;
+              private LinearLayout root;
+              private String deviceId;
+
+              private volatile boolean verifying = false;
+              private boolean unlocked = false;
+              private long lastVerified = 0;
+              private String expiry = "";
+
               @Override
               public void onCreate(Bundle state) {
                   super.onCreate(state);
-                  LinearLayout view = new LinearLayout(this);
-                  view.setOrientation(LinearLayout.VERTICAL);
-                  view.setPadding(32, 48, 32, 24);
-                  view.setBackgroundColor(Color.WHITE);
 
-                  TextView title = new TextView(this);
-                  title.setText("WRP");
-                  title.setTextSize(36);
-                  title.setTextColor(Color.rgb(20, 58, 120));
-                  view.addView(title);
+                  prefs = getSharedPreferences(
+                      "wrp_v02_prefs", MODE_PRIVATE);
 
-                  TextView sub = new TextView(this);
-                  sub.setText("Activation Starter");
-                  view.addView(sub);
+                  secrets = new SecureStore(this);
 
-                  EditText server = new EditText(this);
-                  server.setSingleLine(true);
-                  server.setHint("https://your-server.example");
-                  view.addView(server);
+                  deviceId = prefs.getString("device_id", null);
 
-                  EditText key = new EditText(this);
-                  key.setSingleLine(true);
-                  key.setHint("Activation key");
-                  view.addView(key);
+                  if (deviceId == null) {
+                      deviceId = UUID.randomUUID().toString();
+                      prefs.edit().putString(
+                          "device_id", deviceId).apply();
+                  }
 
+                  ScrollView scroll = new ScrollView(this);
+                  scroll.setBackgroundColor(Color.rgb(244,247,252));
+                  scroll.setFillViewport(true);
+
+                  root = new LinearLayout(this);
+                  root.setOrientation(LinearLayout.VERTICAL);
+                  root.setPadding(28,40,28,28);
+
+                  scroll.addView(root);
+                  setContentView(scroll);
+
+                  String savedKey = secrets.get();
+
+                  if (savedKey != null) {
+                      showLoading();
+                      verify(savedKey, false);
+                  } else {
+                      showActivation("Enter your activation key.");
+                  }
+              }
+
+              @Override
+              protected void onResume() {
+                  super.onResume();
+
+                  if (unlocked && !verifying &&
+                      System.currentTimeMillis() - lastVerified > 30000) {
+
+                      String savedKey = secrets.get();
+                      unlocked = false;
+
+                      if (savedKey != null) {
+                          showLoading();
+                          verify(savedKey, false);
+                      } else {
+                          showActivation("Activation required.");
+                      }
+                  }
+              }
+
+              private TextView title(String text) {
+                  TextView view = new TextView(this);
+                  view.setText(text);
+                  view.setTextSize(24);
+                  view.setTextColor(Color.rgb(35,84,180));
+                  view.setPadding(0,12,0,20);
+                  root.addView(view);
+                  return view;
+              }
+
+              private TextView label(String text) {
+                  TextView view = new TextView(this);
+                  view.setText(text);
+                  view.setTextSize(15);
+                  view.setTextColor(Color.DKGRAY);
+                  view.setPadding(0,8,0,8);
+                  root.addView(view);
+                  return view;
+              }
+
+              private Button button(String text, Runnable action) {
                   Button button = new Button(this);
-                  button.setText("ACTIVATE WRP");
-                  view.addView(button);
+                  button.setAllCaps(false);
+                  button.setText(text);
+                  root.addView(button);
+                  button.setOnClickListener(v -> action.run());
+                  return button;
+              }
 
-                  TextView status = new TextView(this);
-                  status.setText("Enter your HTTPS server and key.");
-                  view.addView(status);
-                  setContentView(view);
+              private void reset(String subtitle) {
+                  root.removeAllViews();
+                  title("WRP v0.2");
+                  label(subtitle);
+              }
 
-                  button.setOnClickListener(v -> {
-                      String base = server.getText().toString().trim();
-                      String code = key.getText().toString().trim();
-                      if (!base.startsWith("https://") || code.isEmpty()) {
-                          status.setText("HTTPS server and key required.");
+              private String server() {
+                  return prefs.getString(
+                      "server_url", DEFAULT_SERVER);
+              }
+
+              private void showLoading() {
+                  reset("Checking activation with WRP Server...");
+                  label("Please wait. Free hosting may take time to wake.");
+              }
+
+              private void showActivation(String message) {
+                  unlocked = false;
+                  reset("WRP Activation");
+
+                  label(message);
+                  label("Server URL");
+
+                  EditText serverInput = new EditText(this);
+                  serverInput.setSingleLine(true);
+                  serverInput.setText(server());
+                  root.addView(serverInput);
+
+                  label("Activation Key");
+
+                  EditText keyInput = new EditText(this);
+                  keyInput.setSingleLine(true);
+                  keyInput.setHint("wrp_...");
+                  keyInput.setInputType(
+                      InputType.TYPE_CLASS_TEXT |
+                      InputType.TYPE_TEXT_VARIATION_PASSWORD);
+                  root.addView(keyInput);
+
+                  TextView info = label("");
+
+                  button("ACTIVATE WRP", () -> {
+                      String url = serverInput.getText()
+                          .toString().trim().replaceAll("/+$","");
+                      String key = keyInput.getText()
+                          .toString().trim();
+
+                      if (!url.startsWith("https://") ||
+                          key.isEmpty()) {
+                          info.setText("Enter a valid URL and key.");
                           return;
                       }
-                      button.setEnabled(false);
-                      status.setText("Checking activation...");
 
-                      new Thread(() -> {
-                          String result = "Activation failed.";
-                          HttpURLConnection conn = null;
-                          try {
-                              String deviceId = getPreferences(MODE_PRIVATE)
-                                      .getString("device_id", null);
-                              if (deviceId == null) {
-                                  deviceId = UUID.randomUUID().toString();
-                                  getPreferences(MODE_PRIVATE).edit()
-                                          .putString("device_id", deviceId).apply();
-                              }
-                              String endpoint = base.replaceAll("/+$", "") + "/api/activate";
-                              conn = (HttpURLConnection) new URL(endpoint).openConnection();
-                              conn.setRequestMethod("POST");
-                              conn.setConnectTimeout(10000);
-                              conn.setReadTimeout(10000);
-                              conn.setDoOutput(true);
-                              conn.setRequestProperty("Content-Type", "application/json");
-                              JSONObject request = new JSONObject();
-                              request.put("key", code);
-                              request.put("deviceId", deviceId);
-                              try (OutputStream output = conn.getOutputStream()) {
-                                  output.write(request.toString()
-                                          .getBytes(StandardCharsets.UTF_8));
-                              }
-                              int httpCode = conn.getResponseCode();
-                              InputStream input = httpCode == 200
-                                      ? conn.getInputStream() : conn.getErrorStream();
-                              if (input != null) {
-                                  try (InputStream in = input;
-                                       ByteArrayOutputStream bytes = new ByteArrayOutputStream()) {
-                                      byte[] chunk = new byte[1024];
-                                      int size;
-                                      while ((size = in.read(chunk)) != -1) {
-                                          bytes.write(chunk, 0, size);
-                                          if (bytes.size() > 65536) break;
-                                      }
-                                      JSONObject response = new JSONObject(
-                                              new String(bytes.toByteArray(),
-                                                      StandardCharsets.UTF_8));
-                                      if (httpCode == 200 && response.optBoolean("ok", false)) {
-                                          result = "WRP activated successfully.";
-                                      } else {
-                                          result = "Server rejected activation.";
-                                      }
+                      prefs.edit().putString(
+                          "server_url", url).apply();
+
+                      showLoading();
+                      verify(key, true);
+                  });
+
+                  String saved = secrets.get();
+
+                  if (saved != null) {
+                      button("Recheck Saved Key", () -> {
+                          showLoading();
+                          verify(saved, false);
+                      });
+                  }
+
+                  label("This beta provides a licensed dashboard and Telegram launcher.");
+              }
+
+              private void verify(String key, boolean save) {
+                  if (verifying) return;
+
+                  if (key == null || !server().startsWith("https://")) {
+                      showActivation("Invalid activation details.");
+                      return;
+                  }
+
+                  verifying = true;
+
+                  new Thread(() -> {
+                      HttpURLConnection connection = null;
+
+                      boolean success = false;
+                      String error = "Activation failed.";
+                      String expiresAt = "";
+
+                      try {
+                          URL url = new URL(
+                              server().replaceAll("/+$","") +
+                              "/api/activate");
+
+                          connection = (HttpURLConnection)
+                              url.openConnection();
+
+                          connection.setRequestMethod("POST");
+                          connection.setDoOutput(true);
+                          connection.setConnectTimeout(20000);
+                          connection.setReadTimeout(90000);
+                          connection.setRequestProperty(
+                              "Content-Type",
+                              "application/json; charset=UTF-8");
+
+                          JSONObject body = new JSONObject();
+                          body.put("key", key);
+                          body.put("deviceId", deviceId);
+
+                          try (OutputStream out =
+                              connection.getOutputStream()) {
+                              out.write(body.toString().getBytes(
+                                  StandardCharsets.UTF_8));
+                          }
+
+                          int status = connection.getResponseCode();
+
+                          InputStream stream =
+                              status >= 200 && status < 300
+                              ? connection.getInputStream()
+                              : connection.getErrorStream();
+
+                          ByteArrayOutputStream data =
+                              new ByteArrayOutputStream();
+
+                          try (InputStream input = stream) {
+                              byte[] buffer = new byte[2048];
+                              int n;
+
+                              while ((n = input.read(buffer)) != -1) {
+                                  data.write(buffer,0,n);
+                                  if (data.size() > 65536) {
+                                      throw new Exception("Response too large");
                                   }
                               }
-                          } catch (Exception e) {
-                              result = "Connection failed. Check backend URL.";
-                          } finally {
-                              if (conn != null) conn.disconnect();
                           }
-                          String message = result;
-                          runOnUiThread(() -> {
-                              status.setText(message);
-                              button.setEnabled(true);
-                          });
-                      }).start();
+
+                          JSONObject result = new JSONObject(
+                              new String(data.toByteArray(),
+                                  StandardCharsets.UTF_8));
+
+                          success = status == 200 &&
+                              result.optBoolean("ok",false);
+
+                          if (success) {
+                              expiresAt = result.optString(
+                                  "expiresAt","");
+
+                              if (save) {
+                                  secrets.put(key);
+                              }
+
+                          } else {
+                              error = result.optString(
+                                  "error","License rejected");
+                          }
+
+                      } catch (Exception e) {
+                          error = "Server connection or key error.";
+                      } finally {
+                          if (connection != null) {
+                              connection.disconnect();
+                          }
+                      }
+
+                      final boolean ok = success;
+                      final String msg = error;
+                      final String exp = expiresAt;
+
+                      runOnUiThread(() -> {
+                          verifying = false;
+
+                          if (ok) {
+                              unlocked = true;
+                              lastVerified = System.currentTimeMillis();
+                              expiry = exp;
+                              showDashboard();
+                          } else {
+                              showActivation(msg);
+                          }
+                      });
+
+                  }).start();
+              }
+
+              private void showDashboard() {
+                  if (!unlocked) return;
+
+                  reset("Telegram Assistant Dashboard");
+
+                  label("LICENSE: ACTIVE");
+                  label("Expiry: " +
+                      (expiry.isEmpty()
+                      ? "Check Admin Panel" : expiry));
+
+                  button("Refresh License", () -> {
+                      unlocked = false;
+                      showLoading();
+                      verify(secrets.get(),false);
                   });
+
+                  label("TELEGRAM TOOLS");
+
+                  button("Open Telegram", this::openTelegram);
+
+                  button("Account Labels", this::showAccounts);
+
+                  label("SESSION CONTROLS");
+
+                  button("Lock Dashboard", () -> {
+                      unlocked = false;
+                      showActivation("Dashboard locked.");
+                  });
+
+                  button("Forget Activation Key", () -> {
+                      new AlertDialog.Builder(this)
+                          .setTitle("Forget activation?")
+                          .setMessage(
+                              "Local key will be cleared. Server device binding remains.")
+                          .setNegativeButton("Cancel",null)
+                          .setPositiveButton("Forget",(d,w) -> {
+                              secrets.clear();
+                              unlocked = false;
+                              showActivation("Key cleared.");
+                          }).show();
+                  });
+
+                  label("Telegram automation is not enabled in this beta.");
+              }
+
+              private void openTelegram() {
+                  String[] packages = {
+                      "org.telegram.messenger",
+                      "org.thunderdog.challegram"
+                  };
+
+                  for (String pkg : packages) {
+                      Intent intent = getPackageManager()
+                          .getLaunchIntentForPackage(pkg);
+
+                      if (intent != null) {
+                          startActivity(intent);
+                          return;
+                      }
+                  }
+
+                  startActivity(new Intent(
+                      Intent.ACTION_VIEW,
+                      Uri.parse("https://telegram.org/android")));
+              }
+
+              private JSONArray labels() {
+                  try {
+                      return new JSONArray(
+                          prefs.getString("account_labels","[]"));
+                  } catch (Exception e) {
+                      return new JSONArray();
+                  }
+              }
+
+              private void showAccounts() {
+                  JSONArray data = labels();
+                  String[] items = new String[data.length()];
+
+                  for (int i=0; i<data.length(); i++) {
+                      items[i] = data.optString(i,"");
+                  }
+
+                  AlertDialog.Builder dialog =
+                      new AlertDialog.Builder(this);
+
+                  dialog.setTitle("Account Labels - Local Notes");
+                  dialog.setMessage(
+                      "Do not store passwords, OTPs or recovery codes.");
+
+                  dialog.setPositiveButton(
+                      "Add Label",(d,w) -> addLabel());
+
+                  dialog.setNegativeButton("Close",null);
+
+                  if (items.length > 0) {
+                      dialog.setItems(items,(d,i) -> {
+                          new AlertDialog.Builder(this)
+                              .setTitle("Remove label?")
+                              .setMessage(items[i])
+                              .setNegativeButton("Cancel",null)
+                              .setPositiveButton(
+                                  "Remove",(dd,ww) -> {
+                                      JSONArray next = new JSONArray();
+                                      for (int j=0;j<data.length();j++) {
+                                          if (j != i) {
+                                              next.put(
+                                                  data.optString(j,""));
+                                          }
+                                      }
+
+                                      prefs.edit().putString(
+                                          "account_labels",
+                                          next.toString()).apply();
+
+                                      showAccounts();
+                                  }).show();
+                      });
+                  }
+
+                  dialog.show();
+              }
+
+              private void addLabel() {
+                  JSONArray data = labels();
+
+                  if (data.length() >= 10) {
+                      new AlertDialog.Builder(this)
+                          .setMessage("Maximum 10 labels.")
+                          .setPositiveButton("OK",null)
+                          .show();
+                      return;
+                  }
+
+                  EditText input = new EditText(this);
+                  input.setSingleLine(true);
+                  input.setHint("Example: Personal Account");
+
+                  new AlertDialog.Builder(this)
+                      .setTitle("New Account Label")
+                      .setView(input)
+                      .setNegativeButton("Cancel",null)
+                      .setPositiveButton("Save",(d,w) -> {
+                          String value = input.getText()
+                              .toString().trim();
+
+                          if (!value.isEmpty() &&
+                              value.length() <= 50) {
+                              data.put(value);
+
+                              prefs.edit().putString(
+                                  "account_labels",
+                                  data.toString()).apply();
+                          }
+
+                          showAccounts();
+                      }).show();
               }
           }
           EOF
 
-      - name: Generate source README
+      - name: Validate Source
         shell: bash
         run: |
-          cat > SOURCE-README.md <<'EOF'
-          # WRP Android Starter
+          test -s settings.gradle
+          test -s app/build.gradle
+          test -s app/src/main/AndroidManifest.xml
+          test -s app/src/main/java/mm/wrp/project/MainActivity.java
+          test -s app/src/main/java/mm/wrp/project/SecureStore.java
 
-          This project is generated by GitHub Actions; no source ZIP upload is needed.
-          It is an original Android activation-screen starter, not a Relay.apk clone.
-          Its activation flow needs a separate compatible HTTPS backend server.
-
-          Android build:
-          - Java 17
-          - Android Gradle Plugin 8.7.3
-          - Gradle 8.9
-          - Android SDK API 35
-
-          Build: gradle --no-daemon :app:assembleDebug
-          Output: app/build/outputs/apk/debug/app-debug.apk
-          EOF
-
-      - name: Upload WRP source ZIP
-        uses: actions/upload-artifact@v4
-        with:
-          name: WRP-Source-ZIP
-          path: |
-            SOURCE-README.md
-            settings.gradle
-            build.gradle
-            gradle.properties
-            app/build.gradle
-            app/src/main/
-          if-no-files-found: error
-          retention-days: 14
-
-      - name: Build WRP debug APK
+      - name: Build APK
         run: gradle --no-daemon --stacktrace :app:assembleDebug
 
-      - name: Verify built APK
+      - name: Verify APK
         shell: bash
         run: |
-          set -euo pipefail
-          APK="app/build/outputs/apk/debug/app-debug.apk"
+          APK=app/build/outputs/apk/debug/app-debug.apk
           test -s "$APK"
           unzip -tq "$APK" >/dev/null
           ls -lh "$APK"
 
-      - name: Upload WRP APK
+      - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: WRP-Android-APK
+          name: WRP-v02-Beta-APK
           path: app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Create Source ZIP
+        shell: bash
+        run: |
+          zip -qr WRP-v02-Source.zip \
+            settings.gradle \
+            build.gradle \
+            gradle.properties \
+            app/build.gradle \
+            app/src/main/AndroidManifest.xml \
+            app/src/main/java/mm/wrp/project/MainActivity.java \
+            app/src/main/java/mm/wrp/project/SecureStore.java
+
+      - name: Upload Source ZIP
+        uses: actions/upload-artifact@v4
+        with:
+          name: WRP-v02-Source-ZIP
+          path: WRP-v02-Source.zip
           if-no-files-found: error
           retention-days: 14
