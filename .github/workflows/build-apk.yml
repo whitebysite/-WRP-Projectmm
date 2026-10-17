@@ -1,5 +1,5 @@
 
-name: WRP v0.2 Android APK Build
+name: WRP v0.3 Android APK Build
 
 on:
   workflow_dispatch:
@@ -13,7 +13,6 @@ jobs:
   build:
     runs-on: ubuntu-24.04
     timeout-minutes: 35
-
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -27,13 +26,11 @@ jobs:
       - name: Setup Android SDK
         shell: bash
         run: |
-          set -e
-          SDK="${ANDROID_HOME:-/usr/local/lib/android/sdk}"
+          set -euo pipefail
+          SDK="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-/usr/local/lib/android/sdk}}"
           echo "ANDROID_HOME=$SDK" >> "$GITHUB_ENV"
-          if [ ! -f "$SDK/platforms/android-35/android.jar" ]; then
-            "$SDK/cmdline-tools/latest/bin/sdkmanager" \
-              --sdk_root="$SDK" \
-              --install 'platforms;android-35' 'build-tools;35.0.0'
+          if [ ! -f "$SDK/platforms/android-35/android.jar" ] || [ ! -x "$SDK/build-tools/35.0.0/aapt2" ]; then
+            "$SDK/cmdline-tools/latest/bin/sdkmanager" --sdk_root="$SDK" --install 'platforms;android-35' 'build-tools;35.0.0'
           fi
 
       - name: Setup Gradle
@@ -41,98 +38,82 @@ jobs:
         with:
           gradle-version: '8.9'
 
-      - name: Generate Android Project
+      - name: Generate WRP v0.3 Source
         shell: bash
         run: |
-          set -e
-          mkdir -p app/src/main/java/mm/wrp/project
-
-          cat > settings.gradle <<'EOF'
+          set -euo pipefail
+          mkdir -p "$(dirname settings.gradle)"
+          cat > 'settings.gradle' <<'WRP_V03_SOURCE_0'
           pluginManagement {
-              repositories {
-                  google()
-                  mavenCentral()
-                  gradlePluginPortal()
-              }
+              repositories { google(); mavenCentral(); gradlePluginPortal() }
           }
           dependencyResolutionManagement {
               repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)
-              repositories {
-                  google()
-                  mavenCentral()
-              }
+              repositories { google(); mavenCentral() }
           }
           rootProject.name = 'WRP'
           include ':app'
-          EOF
+          WRP_V03_SOURCE_0
 
-          cat > build.gradle <<'EOF'
+          mkdir -p "$(dirname build.gradle)"
+          cat > 'build.gradle' <<'WRP_V03_SOURCE_1'
           plugins {
               id 'com.android.application' version '8.7.3' apply false
           }
-          EOF
+          WRP_V03_SOURCE_1
 
-          cat > gradle.properties <<'EOF'
+          mkdir -p "$(dirname gradle.properties)"
+          cat > 'gradle.properties' <<'WRP_V03_SOURCE_2'
           org.gradle.jvmargs=-Xmx2048m -Dfile.encoding=UTF-8
           android.useAndroidX=true
-          EOF
+          WRP_V03_SOURCE_2
 
-          cat > app/build.gradle <<'EOF'
+          mkdir -p "$(dirname app/build.gradle)"
+          cat > 'app/build.gradle' <<'WRP_V03_SOURCE_3'
           plugins {
               id 'com.android.application'
           }
-
           android {
               namespace 'mm.wrp.project'
               compileSdk 35
-
               defaultConfig {
-                  applicationId 'mm.wrp.project.beta'
+                  applicationId 'mm.wrp.project.v03'
                   minSdk 24
                   targetSdk 35
-                  versionCode 2
-                  versionName '0.2.0-beta'
+                  versionCode 3
+                  versionName '0.3.0-beta'
               }
-
               compileOptions {
                   sourceCompatibility JavaVersion.VERSION_17
                   targetCompatibility JavaVersion.VERSION_17
               }
           }
-          EOF
+          WRP_V03_SOURCE_3
 
-          cat > app/src/main/AndroidManifest.xml <<'EOF'
+          mkdir -p "$(dirname app/src/main/AndroidManifest.xml)"
+          cat > 'app/src/main/AndroidManifest.xml' <<'WRP_V03_SOURCE_4'
           <?xml version="1.0" encoding="utf-8"?>
           <manifest xmlns:android="http://schemas.android.com/apk/res/android">
-
-              <uses-permission android:name="android.permission.INTERNET"/>
-
+              <uses-permission android:name="android.permission.INTERNET" />
               <queries>
-                  <package android:name="org.telegram.messenger"/>
-                  <package android:name="org.thunderdog.challegram"/>
+                  <package android:name="org.telegram.messenger" />
+                  <package android:name="org.thunderdog.challegram" />
               </queries>
-
-              <application
-                  android:label="WRP v0.2"
-                  android:allowBackup="false"
+              <application android:label="WRP v0.3" android:allowBackup="false"
                   android:usesCleartextTraffic="false"
                   android:theme="@android:style/Theme.Material.Light.NoActionBar">
-
-                  <activity
-                      android:name=".MainActivity"
-                      android:exported="true">
-
+                  <activity android:name=".MainActivity" android:exported="true">
                       <intent-filter>
-                          <action android:name="android.intent.action.MAIN"/>
-                          <category android:name="android.intent.category.LAUNCHER"/>
+                          <action android:name="android.intent.action.MAIN" />
+                          <category android:name="android.intent.category.LAUNCHER" />
                       </intent-filter>
-
                   </activity>
               </application>
           </manifest>
-          EOF
+          WRP_V03_SOURCE_4
 
-          cat > app/src/main/java/mm/wrp/project/SecureStore.java <<'EOF'
+          mkdir -p "$(dirname app/src/main/java/mm/wrp/project/SecureStore.java)"
+          cat > 'app/src/main/java/mm/wrp/project/SecureStore.java' <<'WRP_V03_SOURCE_5'
           package mm.wrp.project;
 
           import android.content.Context;
@@ -153,77 +134,46 @@ jobs:
               private final SharedPreferences prefs;
 
               SecureStore(Context context) {
-                  prefs = context.getSharedPreferences(
-                      "wrp_secure", Context.MODE_PRIVATE);
+                  prefs = context.getSharedPreferences("wrp_secure", Context.MODE_PRIVATE);
               }
 
               private SecretKey key() throws Exception {
                   KeyStore store = KeyStore.getInstance("AndroidKeyStore");
                   store.load(null);
-
                   if (store.containsAlias(ALIAS)) {
                       return (SecretKey) store.getKey(ALIAS, null);
                   }
-
-                  KeyGenerator generator = KeyGenerator.getInstance(
-                      "AES", "AndroidKeyStore");
-
-                  generator.init(
-                      new KeyGenParameterSpec.Builder(
-                          ALIAS,
-                          KeyProperties.PURPOSE_ENCRYPT |
-                          KeyProperties.PURPOSE_DECRYPT)
+                  KeyGenerator generator = KeyGenerator.getInstance("AES", "AndroidKeyStore");
+                  generator.init(new KeyGenParameterSpec.Builder(ALIAS,
+                          KeyProperties.PURPOSE_ENCRYPT | KeyProperties.PURPOSE_DECRYPT)
                           .setBlockModes(KeyProperties.BLOCK_MODE_GCM)
-                          .setEncryptionPaddings(
-                              KeyProperties.ENCRYPTION_PADDING_NONE)
+                          .setEncryptionPaddings(KeyProperties.ENCRYPTION_PADDING_NONE)
                           .setRandomizedEncryptionRequired(true)
                           .setKeySize(256)
-                          .build()
-                  );
-
+                          .build());
                   return generator.generateKey();
               }
 
               void put(String plain) throws Exception {
                   Cipher cipher = Cipher.getInstance("AES/GCM/NoPadding");
                   cipher.init(Cipher.ENCRYPT_MODE, key());
-
-                  byte[] data = cipher.doFinal(
-                      plain.getBytes(StandardCharsets.UTF_8));
-
-                  String iv = Base64.encodeToString(
-                      cipher.getIV(), Base64.NO_WRAP);
-                  String encrypted = Base64.encodeToString(
-                      data, Base64.NO_WRAP);
-
-                  prefs.edit().putString(
-                      PREF, iv + "." + encrypted).apply();
+                  byte[] bytes = cipher.doFinal(plain.getBytes(StandardCharsets.UTF_8));
+                  String iv = Base64.encodeToString(cipher.getIV(), Base64.NO_WRAP);
+                  String encrypted = Base64.encodeToString(bytes, Base64.NO_WRAP);
+                  prefs.edit().putString(PREF, iv + "." + encrypted).apply();
               }
 
               String get() {
-                  String value = prefs.getString(PREF, null);
-                  if (value == null) return null;
-
+                  String encrypted = prefs.getString(PREF, null);
+                  if (encrypted == null) return null;
                   try {
-                      String[] parts = value.split("\\.", -1);
-                      if (parts.length != 2) return null;
-
-                      Cipher cipher = Cipher.getInstance(
-                          "AES/GCM/NoPadding");
-
-                      cipher.init(
-                          Cipher.DECRYPT_MODE,
-                          key(),
-                          new GCMParameterSpec(
-                              128,
-                              Base64.decode(parts[0], Base64.NO_WRAP))
-                      );
-
-                      return new String(
-                          cipher.doFinal(Base64.decode(
-                              parts[1], Base64.NO_WRAP)),
-                          StandardCharsets.UTF_8);
-
+                      String[] parts = encrypted.split("\\.", -1);
+                      if (parts.length != 2) throw new IllegalArgumentException("Invalid key data");
+                      byte[] iv = Base64.decode(parts[0], Base64.NO_WRAP);
+                      byte[] payload = Base64.decode(parts[1], Base64.NO_WRAP);
+                      Cipher cipher = Cipher.getInstance("AES/GCM/NoPadding");
+                      cipher.init(Cipher.DECRYPT_MODE, key(), new GCMParameterSpec(128, iv));
+                      return new String(cipher.doFinal(payload), StandardCharsets.UTF_8);
                   } catch (Exception e) {
                       clear();
                       return null;
@@ -234,25 +184,34 @@ jobs:
                   prefs.edit().remove(PREF).apply();
               }
           }
-          EOF
+          WRP_V03_SOURCE_5
 
-          cat > app/src/main/java/mm/wrp/project/MainActivity.java <<'EOF'
+          mkdir -p "$(dirname app/src/main/java/mm/wrp/project/MainActivity.java)"
+          cat > 'app/src/main/java/mm/wrp/project/MainActivity.java' <<'WRP_V03_SOURCE_6'
           package mm.wrp.project;
 
           import android.app.Activity;
           import android.app.AlertDialog;
+          import android.content.ClipData;
+          import android.content.ClipboardManager;
+          import android.util.Patterns;
+          import android.widget.Toast;
+          import android.content.ActivityNotFoundException;
           import android.content.Intent;
           import android.content.SharedPreferences;
           import android.graphics.Color;
+          import android.graphics.Typeface;
+          import android.graphics.drawable.GradientDrawable;
           import android.net.Uri;
           import android.os.Bundle;
-          import android.text.InputType;
           import android.view.View;
           import android.widget.Button;
           import android.widget.EditText;
           import android.widget.LinearLayout;
           import android.widget.ScrollView;
           import android.widget.TextView;
+          import android.text.InputType;
+          import android.util.TypedValue;
           import org.json.JSONArray;
           import org.json.JSONObject;
           import java.io.ByteArrayOutputStream;
@@ -264,495 +223,524 @@ jobs:
           import java.util.UUID;
 
           public class MainActivity extends Activity {
-
-              private static final String DEFAULT_SERVER =
-                  "https://wrp-projectmm.onrender.com";
+              private static final int BLUE = Color.rgb(37, 91, 187);
+              private static final int NAVY = Color.rgb(22, 37, 65);
+              private static final int GREY = Color.rgb(91, 107, 132);
+              private static final int BG = Color.rgb(244, 247, 252);
+              private static final String PREF_NAME = "wrp_v03_prefs";
+              private static final String SERVER_KEY = "server_url";
+              private static final String ACCOUNTS_KEY = "account_labels";
+              private static final String PHONE_PREF = "preset_phone";
+              private static final String GMAIL_PREF = "gmail_addresses";
+              private static final String GMAIL_CURSOR_PREF = "gmail_rotation_cursor";
 
               private SharedPreferences prefs;
               private SecureStore secrets;
               private LinearLayout root;
-              private String deviceId;
-
               private volatile boolean verifying = false;
               private boolean unlocked = false;
-              private long lastVerified = 0;
-              private String expiry = "";
+              private long lastVerifiedMs = 0;
+              private String expiryText = "";
+              private String deviceId;
 
-              @Override
-              public void onCreate(Bundle state) {
+              @Override public void onCreate(Bundle state) {
                   super.onCreate(state);
-
-                  prefs = getSharedPreferences(
-                      "wrp_v02_prefs", MODE_PRIVATE);
-
+                  prefs = getSharedPreferences(PREF_NAME, MODE_PRIVATE);
                   secrets = new SecureStore(this);
-
                   deviceId = prefs.getString("device_id", null);
-
                   if (deviceId == null) {
                       deviceId = UUID.randomUUID().toString();
-                      prefs.edit().putString(
-                          "device_id", deviceId).apply();
+                      prefs.edit().putString("device_id", deviceId).apply();
                   }
+                  setupRoot();
+                  String server = prefs.getString(SERVER_KEY, "");
+                  String key = secrets.get();
+                  if (!server.isEmpty() && key != null) {
+                      showLoading("Checking saved activation with server...");
+                      verify(server, key, false);
+                  } else showActivation("Activate WRP to enter your dashboard.");
+              }
 
+              @Override protected void onResume() {
+                  super.onResume();
+                  if (unlocked && !verifying && System.currentTimeMillis() - lastVerifiedMs > 30000) {
+                      String url = prefs.getString(SERVER_KEY, "");
+                      String key = secrets.get();
+                      unlocked = false;
+                      showLoading("Rechecking license...");
+                      if (key != null && !url.isEmpty()) verify(url, key, false);
+                      else showActivation("No valid saved activation.");
+                  }
+              }
+
+              private int dp(int n) {
+                  return Math.round(getResources().getDisplayMetrics().density * n);
+              }
+
+              private void setupRoot() {
                   ScrollView scroll = new ScrollView(this);
-                  scroll.setBackgroundColor(Color.rgb(244,247,252));
                   scroll.setFillViewport(true);
-
+                  scroll.setBackgroundColor(BG);
                   root = new LinearLayout(this);
                   root.setOrientation(LinearLayout.VERTICAL);
-                  root.setPadding(28,40,28,28);
-
+                  root.setPadding(dp(22), dp(32), dp(22), dp(26));
                   scroll.addView(root);
                   setContentView(scroll);
-
-                  String savedKey = secrets.get();
-
-                  if (savedKey != null) {
-                      showLoading();
-                      verify(savedKey, false);
-                  } else {
-                      showActivation("Enter your activation key.");
-                  }
               }
 
-              @Override
-              protected void onResume() {
-                  super.onResume();
-
-                  if (unlocked && !verifying &&
-                      System.currentTimeMillis() - lastVerified > 30000) {
-
-                      String savedKey = secrets.get();
-                      unlocked = false;
-
-                      if (savedKey != null) {
-                          showLoading();
-                          verify(savedKey, false);
-                      } else {
-                          showActivation("Activation required.");
-                      }
-                  }
+              private GradientDrawable bg(int color, int radius) {
+                  GradientDrawable b = new GradientDrawable();
+                  b.setColor(color);
+                  b.setCornerRadius(dp(radius));
+                  return b;
               }
 
-              private TextView title(String text) {
-                  TextView view = new TextView(this);
-                  view.setText(text);
-                  view.setTextSize(24);
-                  view.setTextColor(Color.rgb(35,84,180));
-                  view.setPadding(0,12,0,20);
-                  root.addView(view);
-                  return view;
+              private TextView text(String s, int size, int color, boolean bold) {
+                  TextView t = new TextView(this);
+                  t.setText(s);
+                  t.setTextColor(color);
+                  t.setTextSize(TypedValue.COMPLEX_UNIT_SP, size);
+                  if (bold) t.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
+                  t.setPadding(0, dp(5), 0, dp(5));
+                  return t;
               }
 
-              private TextView label(String text) {
-                  TextView view = new TextView(this);
-                  view.setText(text);
-                  view.setTextSize(15);
-                  view.setTextColor(Color.DKGRAY);
-                  view.setPadding(0,8,0,8);
-                  root.addView(view);
-                  return view;
-              }
-
-              private Button button(String text, Runnable action) {
-                  Button button = new Button(this);
-                  button.setAllCaps(false);
-                  button.setText(text);
-                  root.addView(button);
-                  button.setOnClickListener(v -> action.run());
-                  return button;
-              }
-
-              private void reset(String subtitle) {
+              private void header(String subtitle) {
                   root.removeAllViews();
-                  title("WRP v0.2");
-                  label(subtitle);
+                  root.addView(text("WRP", 35, BLUE, true));
+                  root.addView(text("Telegram Registration Helper · v0.3 beta", 14, GREY, false));
+                  root.addView(text(subtitle, 18, NAVY, true));
+                  gap(12);
               }
 
-              private String server() {
-                  return prefs.getString(
-                      "server_url", DEFAULT_SERVER);
+              private void gap(int h) {
+                  View spacer = new View(this);
+                  root.addView(spacer, new LinearLayout.LayoutParams(1, dp(h)));
               }
 
-              private void showLoading() {
-                  reset("Checking activation with WRP Server...");
-                  label("Please wait. Free hosting may take time to wake.");
+              private LinearLayout card() {
+                  LinearLayout box = new LinearLayout(this);
+                  box.setOrientation(LinearLayout.VERTICAL);
+                  box.setPadding(dp(18), dp(16), dp(18), dp(18));
+                  box.setBackground(bg(Color.WHITE, 16));
+                  LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(-1, -2);
+                  params.bottomMargin = dp(14);
+                  root.addView(box, params);
+                  return box;
+              }
+
+              private Button button(String label, LinearLayout container, Runnable click) {
+                  Button b = new Button(this);
+                  b.setAllCaps(false);
+                  b.setText(label);
+                  b.setTextColor(Color.WHITE);
+                  b.setBackground(bg(BLUE, 10));
+                  LinearLayout.LayoutParams p = new LinearLayout.LayoutParams(-1, dp(50));
+                  p.topMargin = dp(12);
+                  container.addView(b, p);
+                  b.setOnClickListener(v -> click.run());
+                  return b;
+              }
+
+              private EditText field(LinearLayout container, String hint, boolean password) {
+                  EditText e = new EditText(this);
+                  e.setSingleLine(true);
+                  e.setTextSize(15);
+                  e.setHint(hint);
+                  if (password) e.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_PASSWORD);
+                  container.addView(e, new LinearLayout.LayoutParams(-1, dp(54)));
+                  return e;
+              }
+
+              private void showLoading(String message) {
+                  header("License Verification");
+                  LinearLayout panel = card();
+                  panel.addView(text(message, 16, GREY, false));
+                  panel.addView(text("An active server connection is required. Free hosting may take a minute to wake.", 13, GREY, false));
               }
 
               private void showActivation(String message) {
                   unlocked = false;
-                  reset("WRP Activation");
-
-                  label(message);
-                  label("Server URL");
-
-                  EditText serverInput = new EditText(this);
-                  serverInput.setSingleLine(true);
-                  serverInput.setText(server());
-                  root.addView(serverInput);
-
-                  label("Activation Key");
-
-                  EditText keyInput = new EditText(this);
-                  keyInput.setSingleLine(true);
-                  keyInput.setHint("wrp_...");
-                  keyInput.setInputType(
-                      InputType.TYPE_CLASS_TEXT |
-                      InputType.TYPE_TEXT_VARIATION_PASSWORD);
-                  root.addView(keyInput);
-
-                  TextView info = label("");
-
-                  button("ACTIVATE WRP", () -> {
-                      String url = serverInput.getText()
-                          .toString().trim().replaceAll("/+$","");
-                      String key = keyInput.getText()
-                          .toString().trim();
-
-                      if (!url.startsWith("https://") ||
-                          key.isEmpty()) {
-                          info.setText("Enter a valid URL and key.");
+                  header("Activate your device");
+                  LinearLayout panel = card();
+                  panel.addView(text("HTTPS Server URL", 14, NAVY, true));
+                  EditText server = field(panel, "https://your-server.onrender.com", false);
+                  server.setText(prefs.getString(SERVER_KEY, ""));
+                  panel.addView(text("Activation Key", 14, NAVY, true));
+                  EditText key = field(panel, "wrp_...", true);
+                  TextView info = text(message, 13, GREY, false);
+                  panel.addView(info);
+                  Button activate = button("Activate / Verify", panel, () -> {
+                      String url = server.getText().toString().trim().replaceAll("/+$", "");
+                      String k = key.getText().toString().trim();
+                      if (!url.startsWith("https://") || k.isEmpty()) {
+                          info.setText("Enter a valid HTTPS address and activation key.");
                           return;
                       }
-
-                      prefs.edit().putString(
-                          "server_url", url).apply();
-
-                      showLoading();
-                      verify(key, true);
+                      info.setText("Contacting WRP server...");
+                      activateRequest(url, k, info);
                   });
-
-                  String saved = secrets.get();
-
-                  if (saved != null) {
-                      button("Recheck Saved Key", () -> {
-                          showLoading();
-                          verify(saved, false);
+                  activate.setTag("activate_button");
+                  String stored = secrets.get();
+                  if (stored != null && !prefs.getString(SERVER_KEY, "").isEmpty()) {
+                      button("Recheck saved activation", panel, () -> {
+                          if (verifying) return;
+                          showLoading("Rechecking saved activation...");
+                          verify(prefs.getString(SERVER_KEY, ""), secrets.get(), false);
                       });
+                      button("Clear saved activation", panel, () -> new AlertDialog.Builder(this)
+                              .setTitle("Clear saved license?")
+                              .setMessage("This clears this app's local key but does not release the server-side device binding.")
+                              .setNegativeButton("Cancel", null)
+                              .setPositiveButton("Clear", (d, w) -> {
+                                  secrets.clear();
+                                  prefs.edit().remove(SERVER_KEY).apply();
+                                  showActivation("Saved activation cleared.");
+                              }).show());
                   }
-
-                  label("This beta provides a licensed dashboard and Telegram launcher.");
+                  LinearLayout note = card();
+                  note.addView(text("WRP v0.3 stores your phone and Gmail selection settings locally. Telegram verification remains user-controlled.", 13, GREY, false));
               }
 
-              private void verify(String key, boolean save) {
+              private void activateRequest(String url, String key, TextView info) {
                   if (verifying) return;
+                  verify(url, key, true);
+              }
 
-                  if (key == null || !server().startsWith("https://")) {
-                      showActivation("Invalid activation details.");
+              private void verify(String base, String key, boolean saveKey) {
+                  if (verifying) return;
+                  if (key == null || !base.startsWith("https://")) {
+                      showActivation("Missing HTTPS server URL or saved key.");
                       return;
                   }
-
                   verifying = true;
-
                   new Thread(() -> {
-                      HttpURLConnection connection = null;
-
-                      boolean success = false;
-                      String error = "Activation failed.";
-                      String expiresAt = "";
-
+                      HttpURLConnection conn = null;
+                      boolean ok = false;
+                      String msg = "Verification unsuccessful";
+                      String expiry = "";
                       try {
-                          URL url = new URL(
-                              server().replaceAll("/+$","") +
-                              "/api/activate");
-
-                          connection = (HttpURLConnection)
-                              url.openConnection();
-
-                          connection.setRequestMethod("POST");
-                          connection.setDoOutput(true);
-                          connection.setConnectTimeout(20000);
-                          connection.setReadTimeout(90000);
-                          connection.setRequestProperty(
-                              "Content-Type",
-                              "application/json; charset=UTF-8");
-
-                          JSONObject body = new JSONObject();
-                          body.put("key", key);
-                          body.put("deviceId", deviceId);
-
-                          try (OutputStream out =
-                              connection.getOutputStream()) {
-                              out.write(body.toString().getBytes(
-                                  StandardCharsets.UTF_8));
+                          URL endpoint = new URL(base.replaceAll("/+$", "") + "/api/activate");
+                          conn = (HttpURLConnection) endpoint.openConnection();
+                          conn.setConnectTimeout(20000);
+                          conn.setReadTimeout(90000);
+                          conn.setRequestMethod("POST");
+                          conn.setDoOutput(true);
+                          conn.setRequestProperty("Content-Type", "application/json; charset=UTF-8");
+                          JSONObject input = new JSONObject();
+                          input.put("key", key);
+                          input.put("deviceId", deviceId);
+                          try (OutputStream out = conn.getOutputStream()) {
+                              out.write(input.toString().getBytes(StandardCharsets.UTF_8));
                           }
-
-                          int status = connection.getResponseCode();
-
-                          InputStream stream =
-                              status >= 200 && status < 300
-                              ? connection.getInputStream()
-                              : connection.getErrorStream();
-
-                          ByteArrayOutputStream data =
-                              new ByteArrayOutputStream();
-
-                          try (InputStream input = stream) {
-                              byte[] buffer = new byte[2048];
-                              int n;
-
-                              while ((n = input.read(buffer)) != -1) {
-                                  data.write(buffer,0,n);
-                                  if (data.size() > 65536) {
-                                      throw new Exception("Response too large");
-                                  }
+                          int status = conn.getResponseCode();
+                          InputStream stream = status >= 200 && status < 300 ? conn.getInputStream() : conn.getErrorStream();
+                          String response;
+                          try (InputStream in = stream; ByteArrayOutputStream bytes = new ByteArrayOutputStream()) {
+                              byte[] buf = new byte[2048];
+                              int count;
+                              while ((count = in.read(buf)) != -1) {
+                                  bytes.write(buf, 0, count);
+                                  if (bytes.size() > 65536) throw new IllegalStateException("Response too large");
                               }
+                              response = new String(bytes.toByteArray(), StandardCharsets.UTF_8);
                           }
-
-                          JSONObject result = new JSONObject(
-                              new String(data.toByteArray(),
-                                  StandardCharsets.UTF_8));
-
-                          success = status == 200 &&
-                              result.optBoolean("ok",false);
-
-                          if (success) {
-                              expiresAt = result.optString(
-                                  "expiresAt","");
-
-                              if (save) {
-                                  secrets.put(key);
-                              }
-
-                          } else {
-                              error = result.optString(
-                                  "error","License rejected");
+                          JSONObject result = new JSONObject(response);
+                          ok = status == 200 && result.optBoolean("ok", false);
+                          msg = ok ? "License active" : result.optString("error", "License not accepted");
+                          expiry = result.optString("expiresAt", "");
+                          if (ok && saveKey) {
+                              secrets.put(key);
+                              prefs.edit().putString(SERVER_KEY, base).apply();
                           }
-
                       } catch (Exception e) {
-                          error = "Server connection or key error.";
+                          msg = "Connection or saved-key error. Check the server and try again.";
                       } finally {
-                          if (connection != null) {
-                              connection.disconnect();
-                          }
+                          if (conn != null) conn.disconnect();
                       }
-
-                      final boolean ok = success;
-                      final String msg = error;
-                      final String exp = expiresAt;
-
+                      final boolean verified = ok;
+                      final String resultMsg = msg;
+                      final String resultExpiry = expiry;
                       runOnUiThread(() -> {
                           verifying = false;
-
-                          if (ok) {
+                          if (verified) {
                               unlocked = true;
-                              lastVerified = System.currentTimeMillis();
-                              expiry = exp;
+                              lastVerifiedMs = System.currentTimeMillis();
+                              expiryText = resultExpiry;
                               showDashboard();
-                          } else {
-                              showActivation(msg);
-                          }
+                          } else showActivation(resultMsg);
                       });
-
                   }).start();
               }
 
               private void showDashboard() {
                   if (!unlocked) return;
-
-                  reset("Telegram Assistant Dashboard");
-
-                  label("LICENSE: ACTIVE");
-                  label("Expiry: " +
-                      (expiry.isEmpty()
-                      ? "Check Admin Panel" : expiry));
-
-                  button("Refresh License", () -> {
+                  header("Welcome to your dashboard");
+                  LinearLayout license = card();
+                  license.addView(text("● License Active", 20, Color.rgb(32, 139, 100), true));
+                  license.addView(text("Expiry: " + (expiryText.isEmpty() ? "See admin panel" : expiryText), 13, GREY, false));
+                  license.addView(text("License checked online for this installation.", 12, GREY, false));
+                  button("Refresh License", license, () -> {
                       unlocked = false;
-                      showLoading();
-                      verify(secrets.get(),false);
+                      showLoading("Refreshing license...");
+                      verify(prefs.getString(SERVER_KEY, ""), secrets.get(), false);
                   });
 
-                  label("TELEGRAM TOOLS");
+                  LinearLayout tools = card();
+                  tools.addView(text("Telegram Tools", 20, NAVY, true));
+                  button("Open Telegram", tools, this::openTelegram);
+                  button("Registration Settings (Phone + Gmail)", tools, this::showRegistrationSettings);
+                  button("Prepare Registration Session", tools, this::prepareRegistration);
+                  button("Account Labels (local notes)", tools, this::showAccounts);
+                  tools.addView(text("Gmail auto-selection is local to WRP. This app does not sign into Gmail, read OTPs, or submit Telegram verification automatically.", 12, GREY, false));
 
-                  button("Open Telegram", this::openTelegram);
-
-                  button("Account Labels", this::showAccounts);
-
-                  label("SESSION CONTROLS");
-
-                  button("Lock Dashboard", () -> {
-                      unlocked = false;
-                      showActivation("Dashboard locked.");
-                  });
-
-                  button("Forget Activation Key", () -> {
-                      new AlertDialog.Builder(this)
-                          .setTitle("Forget activation?")
-                          .setMessage(
-                              "Local key will be cleared. Server device binding remains.")
-                          .setNegativeButton("Cancel",null)
-                          .setPositiveButton("Forget",(d,w) -> {
+                  LinearLayout controls = card();
+                  controls.addView(text("Session Controls", 20, NAVY, true));
+                  button("Lock Dashboard", controls, () -> showActivation("Session locked. Recheck saved activation to unlock."));
+                  button("Forget Activation Key", controls, () -> new AlertDialog.Builder(this)
+                          .setTitle("Forget this activation?")
+                          .setMessage("The server still ties this license to this installation. Forgetting does not revoke that binding.")
+                          .setNegativeButton("Cancel", null)
+                          .setPositiveButton("Forget", (d, w) -> {
                               secrets.clear();
                               unlocked = false;
-                              showActivation("Key cleared.");
-                          }).show();
-                  });
-
-                  label("Telegram automation is not enabled in this beta.");
+                              showActivation("Key cleared locally. Generate a new key if needed.");
+                          }).show());
+                  controls.addView(text("No background automation, OTP handling, or bulk account creation runs in this version.", 12, GREY, false));
               }
 
               private void openTelegram() {
-                  String[] packages = {
-                      "org.telegram.messenger",
-                      "org.thunderdog.challegram"
-                  };
-
-                  for (String pkg : packages) {
-                      Intent intent = getPackageManager()
-                          .getLaunchIntentForPackage(pkg);
-
+                  String[] packages = { "org.telegram.messenger", "org.thunderdog.challegram" };
+                  for (String p : packages) {
+                      Intent intent = getPackageManager().getLaunchIntentForPackage(p);
                       if (intent != null) {
                           startActivity(intent);
                           return;
                       }
                   }
-
-                  startActivity(new Intent(
-                      Intent.ACTION_VIEW,
-                      Uri.parse("https://telegram.org/android")));
+                  try {
+                      startActivity(new Intent(Intent.ACTION_VIEW, Uri.parse("https://telegram.org/android")));
+                  } catch (ActivityNotFoundException ex) {
+                      new AlertDialog.Builder(this).setMessage("Install the official Telegram application to continue.")
+                              .setPositiveButton("OK", null).show();
+                  }
               }
 
-              private JSONArray labels() {
-                  try {
-                      return new JSONArray(
-                          prefs.getString("account_labels","[]"));
-                  } catch (Exception e) {
-                      return new JSONArray();
+              private JSONArray gmailAddresses() {
+                  try { return new JSONArray(prefs.getString(GMAIL_PREF, "[]")); }
+                  catch (Exception e) { return new JSONArray(); }
+              }
+
+              private void showRegistrationSettings() {
+                  if (!unlocked) { showActivation("License verification required."); return; }
+                  header("Registration Settings");
+                  LinearLayout panel = card();
+                  panel.addView(text("Phone number for your own Telegram sign-up", 16, NAVY, true));
+                  EditText number = field(panel, "+959XXXXXXXXX", false);
+                  number.setInputType(InputType.TYPE_CLASS_PHONE);
+                  number.setText(prefs.getString(PHONE_PREF, ""));
+                  button("Save Phone Number", panel, () -> {
+                      String phone = number.getText().toString().trim().replaceAll("[\\s()-]", "");
+                      if (!phone.matches("\\+?[0-9]{6,15}")) {
+                          new AlertDialog.Builder(this).setMessage("Use 6-15 digits, optionally starting with +. Provide a number you control.")
+                              .setPositiveButton("OK", null).show();
+                          return;
+                      }
+                      prefs.edit().putString(PHONE_PREF, phone).apply();
+                      Toast.makeText(this, "Phone saved locally", Toast.LENGTH_SHORT).show();
+                  });
+
+                  LinearLayout emails = card();
+                  JSONArray data = gmailAddresses();
+                  emails.addView(text("Gmail profiles: " + data.length(), 18, NAVY, true));
+                  for (int i = 0; i < data.length(); i++) {
+                      emails.addView(text((i + 1) + ". " + data.optString(i), 14, GREY, false));
                   }
+                  button("Add Gmail Address", emails, this::addGmail);
+                  button("Remove Gmail Address", emails, this::removeGmail);
+                  emails.addView(text("Only email addresses are saved on this device. No Gmail permissions, passwords, OTPs or API tokens are requested.", 12, GREY, false));
+
+                  LinearLayout actions = card();
+                  actions.addView(text("Selection Mode: Rotation", 17, NAVY, true));
+                  actions.addView(text("Prepare Session selects the next saved Gmail label in order, then displays it for your confirmation. It cannot choose a Gmail account inside Telegram or access your Gmail messages.", 13, GREY, false));
+                  button("Prepare Session", actions, this::prepareRegistration);
+                  button("Back to Dashboard", actions, this::showDashboard);
+              }
+
+              private void addGmail() {
+                  JSONArray data = gmailAddresses();
+                  if (data.length() >= 15) {
+                      new AlertDialog.Builder(this).setMessage("Maximum 15 saved addresses.")
+                          .setPositiveButton("OK", null).show();
+                      return;
+                  }
+                  EditText input = new EditText(this);
+                  input.setSingleLine(true);
+                  input.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_EMAIL_ADDRESS);
+                  input.setHint("yourname@gmail.com");
+                  new AlertDialog.Builder(this)
+                      .setTitle("Add a Gmail address you control")
+                      .setView(input)
+                      .setNegativeButton("Cancel", null)
+                      .setPositiveButton("Add", (dialog, which) -> {
+                          String email = input.getText().toString().trim().toLowerCase(java.util.Locale.ROOT);
+                          if (!Patterns.EMAIL_ADDRESS.matcher(email).matches() ||
+                              !(email.endsWith("@gmail.com") || email.endsWith("@googlemail.com"))) {
+                              Toast.makeText(this, "Enter a valid Gmail address", Toast.LENGTH_LONG).show();
+                              showRegistrationSettings();
+                              return;
+                          }
+                          for (int j = 0; j < data.length(); j++) {
+                              if (email.equalsIgnoreCase(data.optString(j))) {
+                                  Toast.makeText(this, "Already saved", Toast.LENGTH_SHORT).show();
+                                  showRegistrationSettings();
+                                  return;
+                              }
+                          }
+                          data.put(email);
+                          prefs.edit().putString(GMAIL_PREF, data.toString()).apply();
+                          showRegistrationSettings();
+                      }).show();
+              }
+
+              private void removeGmail() {
+                  JSONArray data = gmailAddresses();
+                  if (data.length() == 0) {
+                      Toast.makeText(this, "No saved Gmail addresses", Toast.LENGTH_SHORT).show();
+                      return;
+                  }
+                  String[] addresses = new String[data.length()];
+                  for (int i=0; i<data.length(); i++) addresses[i] = data.optString(i);
+                  new AlertDialog.Builder(this)
+                      .setTitle("Remove a saved address")
+                      .setItems(addresses, (dialog, index) -> {
+                          JSONArray remaining = new JSONArray();
+                          for (int j = 0; j < data.length(); j++) {
+                              if (j != index) remaining.put(data.optString(j));
+                          }
+                          prefs.edit()
+                              .putString(GMAIL_PREF, remaining.toString())
+                              .putInt(GMAIL_CURSOR_PREF, 0)
+                              .apply();
+                          showRegistrationSettings();
+                      })
+                      .setNegativeButton("Cancel", null).show();
+              }
+
+              private void prepareRegistration() {
+                  if (!unlocked) { showActivation("License verification required."); return; }
+                  String phone = prefs.getString(PHONE_PREF, "");
+                  JSONArray data = gmailAddresses();
+                  if (!phone.matches("\\+?[0-9]{6,15}") || data.length() == 0) {
+                      new AlertDialog.Builder(this)
+                          .setTitle("Set up your registration preferences")
+                          .setMessage("Save a phone number and at least one Gmail address first.")
+                          .setNegativeButton("Cancel", null)
+                          .setPositiveButton("Open Settings", (d,w) -> showRegistrationSettings())
+                          .show();
+                      return;
+                  }
+                  int cursor = prefs.getInt(GMAIL_CURSOR_PREF, 0);
+                  int index = Math.floorMod(cursor, data.length());
+                  String selected = data.optString(index);
+                  prefs.edit().putInt(GMAIL_CURSOR_PREF, (index + 1) % data.length()).apply();
+                  header("Registration Session Prepared");
+                  LinearLayout panel = card();
+                  panel.addView(text("Phone: " + phone, 16, NAVY, true));
+                  panel.addView(text("Selected Gmail: " + selected, 16, NAVY, true));
+                  panel.addView(text("Gmail selection is local to WRP only. Sign-up and all Telegram verification must be completed in Telegram by you.", 13, GREY, false));
+                  button("Copy Phone Number", panel, () -> {
+                      ClipboardManager clipboard = (ClipboardManager) getSystemService(CLIPBOARD_SERVICE);
+                      if (clipboard != null) {
+                          clipboard.setPrimaryClip(ClipData.newPlainText("phone", phone));
+                          Toast.makeText(this, "Phone copied", Toast.LENGTH_SHORT).show();
+                      }
+                  });
+                  button("Open Telegram", panel, this::openTelegram);
+                  button("Choose Next Gmail Profile", panel, this::prepareRegistration);
+                  button("Back to Dashboard", panel, this::showDashboard);
+              }
+
+              private JSONArray accountLabels() {
+                  try { return new JSONArray(prefs.getString(ACCOUNTS_KEY, "[]")); }
+                  catch (Exception e) { return new JSONArray(); }
               }
 
               private void showAccounts() {
-                  JSONArray data = labels();
-                  String[] items = new String[data.length()];
-
-                  for (int i=0; i<data.length(); i++) {
-                      items[i] = data.optString(i,"");
+                  JSONArray current = accountLabels();
+                  String[] labels = new String[current.length()];
+                  for (int i = 0; i < current.length(); i++) labels[i] = current.optString(i, "");
+                  AlertDialog.Builder dialog = new AlertDialog.Builder(this)
+                          .setTitle("Account Labels — notes only")
+                          .setMessage("Do not enter Telegram passwords, OTPs or recovery codes here.")
+                          .setPositiveButton("Add Label", (d, n) -> addLabel())
+                          .setNegativeButton("Close", null);
+                  if (labels.length > 0) {
+                      dialog.setItems(labels, (d, i) -> new AlertDialog.Builder(this)
+                              .setTitle("Delete label?")
+                              .setMessage(labels[i])
+                              .setNegativeButton("Cancel", null)
+                              .setPositiveButton("Delete", (dd, nn) -> {
+                                  JSONArray next = new JSONArray();
+                                  for (int j = 0; j < current.length(); j++) if (j != i) next.put(current.optString(j, ""));
+                                  prefs.edit().putString(ACCOUNTS_KEY, next.toString()).apply();
+                                  showAccounts();
+                              }).show());
                   }
-
-                  AlertDialog.Builder dialog =
-                      new AlertDialog.Builder(this);
-
-                  dialog.setTitle("Account Labels - Local Notes");
-                  dialog.setMessage(
-                      "Do not store passwords, OTPs or recovery codes.");
-
-                  dialog.setPositiveButton(
-                      "Add Label",(d,w) -> addLabel());
-
-                  dialog.setNegativeButton("Close",null);
-
-                  if (items.length > 0) {
-                      dialog.setItems(items,(d,i) -> {
-                          new AlertDialog.Builder(this)
-                              .setTitle("Remove label?")
-                              .setMessage(items[i])
-                              .setNegativeButton("Cancel",null)
-                              .setPositiveButton(
-                                  "Remove",(dd,ww) -> {
-                                      JSONArray next = new JSONArray();
-                                      for (int j=0;j<data.length();j++) {
-                                          if (j != i) {
-                                              next.put(
-                                                  data.optString(j,""));
-                                          }
-                                      }
-
-                                      prefs.edit().putString(
-                                          "account_labels",
-                                          next.toString()).apply();
-
-                                      showAccounts();
-                                  }).show();
-                      });
-                  }
-
                   dialog.show();
               }
 
               private void addLabel() {
-                  JSONArray data = labels();
-
-                  if (data.length() >= 10) {
-                      new AlertDialog.Builder(this)
-                          .setMessage("Maximum 10 labels.")
-                          .setPositiveButton("OK",null)
-                          .show();
+                  JSONArray labels = accountLabels();
+                  if (labels.length() >= 10) {
+                      new AlertDialog.Builder(this).setMessage("Maximum 10 local labels.")
+                              .setPositiveButton("OK", null).show();
                       return;
                   }
-
-                  EditText input = new EditText(this);
-                  input.setSingleLine(true);
-                  input.setHint("Example: Personal Account");
-
+                  EditText entry = new EditText(this);
+                  entry.setSingleLine(true);
+                  entry.setHint("Example: Personal account");
                   new AlertDialog.Builder(this)
-                      .setTitle("New Account Label")
-                      .setView(input)
-                      .setNegativeButton("Cancel",null)
-                      .setPositiveButton("Save",(d,w) -> {
-                          String value = input.getText()
-                              .toString().trim();
-
-                          if (!value.isEmpty() &&
-                              value.length() <= 50) {
-                              data.put(value);
-
-                              prefs.edit().putString(
-                                  "account_labels",
-                                  data.toString()).apply();
-                          }
-
-                          showAccounts();
-                      }).show();
+                          .setTitle("Add local label")
+                          .setView(entry)
+                          .setNegativeButton("Cancel", null)
+                          .setPositiveButton("Save", (d, n) -> {
+                              String value = entry.getText().toString().trim();
+                              if (!value.isEmpty() && value.length() <= 50) {
+                                  labels.put(value);
+                                  prefs.edit().putString(ACCOUNTS_KEY, labels.toString()).apply();
+                              }
+                              showAccounts();
+                          }).show();
               }
           }
-          EOF
-
-      - name: Validate Source
-        shell: bash
-        run: |
-          test -s settings.gradle
-          test -s app/build.gradle
-          test -s app/src/main/AndroidManifest.xml
-          test -s app/src/main/java/mm/wrp/project/MainActivity.java
-          test -s app/src/main/java/mm/wrp/project/SecureStore.java
+          WRP_V03_SOURCE_6
 
       - name: Build APK
         run: gradle --no-daemon --stacktrace :app:assembleDebug
 
       - name: Verify APK
-        shell: bash
         run: |
-          APK=app/build/outputs/apk/debug/app-debug.apk
-          test -s "$APK"
-          unzip -tq "$APK" >/dev/null
-          ls -lh "$APK"
+          test -s app/build/outputs/apk/debug/app-debug.apk
+          unzip -tq app/build/outputs/apk/debug/app-debug.apk >/dev/null
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: WRP-v02-Beta-APK
+          name: WRP-v03-Beta-APK
           path: app/build/outputs/apk/debug/app-debug.apk
           if-no-files-found: error
           retention-days: 14
 
       - name: Create Source ZIP
-        shell: bash
         run: |
-          zip -qr WRP-v02-Source.zip \
-            settings.gradle \
-            build.gradle \
-            gradle.properties \
-            app/build.gradle \
-            app/src/main/AndroidManifest.xml \
-            app/src/main/java/mm/wrp/project/MainActivity.java \
-            app/src/main/java/mm/wrp/project/SecureStore.java
+          zip -qr WRP-v03-Source.zip \
+            settings.gradle build.gradle gradle.properties app/build.gradle app/src/main
 
       - name: Upload Source ZIP
         uses: actions/upload-artifact@v4
         with:
-          name: WRP-v02-Source-ZIP
-          path: WRP-v02-Source.zip
+          name: WRP-v03-Source-ZIP
+          path: WRP-v03-Source.zip
           if-no-files-found: error
           retention-days: 14
