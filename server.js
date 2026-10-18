@@ -96,8 +96,8 @@ function authorized(req) {
 const adminPage = `<!doctype html>
 <html lang="en"><head><meta charset="utf-8" /><meta name="viewport" content="width=device-width,initial-scale=1" />
 <title>WRP Admin</title><style>
-:root{font-family:system-ui,-apple-system,sans-serif;color:#14233e;background:#eef2f9}
-body{margin:0;padding:18px}.wrap{max-width:660px;margin:10px auto}h1{margin:0 0 5px}
+:root{font-family:Inter,system-ui,-apple-system,sans-serif;color:#edf3ff;background:#080f20;font-synthesis:none}
+body{margin:0;padding:22px;background:radial-gradient(ellipse at top left,#18315c 0,transparent 48%),linear-gradient(135deg,#080f20,#101a30);min-height:100vh}.wrap{max-width:980px;margin:10px auto}h1{margin:0 0 8px;letter-spacing:-.04em;font-size:clamp(28px,4vw,40px)}
 p{color:#566579;line-height:1.55}.panel{background:white;padding:20px;border-radius:14px;margin:18px 0;box-shadow:0 3px 18px #12244b10}
 label{display:block;margin:12px 0 5px;font-weight:700}input{width:100%;box-sizing:border-box;padding:12px;font:inherit;border:1px solid #aab6c7;border-radius:8px}
 button{background:#315ec1;color:#fff;border:0;border-radius:8px;padding:11px 15px;margin:10px 6px 0 0;font:inherit;cursor:pointer}
