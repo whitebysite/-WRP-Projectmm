@@ -13,6 +13,8 @@ const PORT = Number(process.env.PORT || 10000);
 const HOST = process.env.HOST || '0.0.0.0';
 const ADMIN_TOKEN = process.env.ADMIN_TOKEN || '';
 const KEY_PEPPER = process.env.KEY_PEPPER || '';
+const DATABASE_URL = process.env.DATABASE_URL || '';
+const Pool = DATABASE_URL ? require('pg').Pool : null;
 const STORE_FILE = path.resolve(process.env.STORE_FILE || './wrp-data/keys.json');
 
 if (!Number.isInteger(PORT) || PORT < 1 || PORT > 65535) throw new Error('Invalid PORT');
@@ -20,17 +22,108 @@ if (ADMIN_TOKEN.length < 32 || KEY_PEPPER.length < 32 || ADMIN_TOKEN === KEY_PEP
   throw new Error('Create TWO DIFFERENT long secret values in Render environment: ADMIN_TOKEN and KEY_PEPPER (32+ characters each).');
 }
 
-fs.mkdirSync(path.dirname(STORE_FILE), { recursive: true });
-if (!fs.existsSync(STORE_FILE)) {
-  fs.writeFileSync(STORE_FILE, JSON.stringify({ keys: [] }, null, 2), { flag: 'wx', mode: 0o600 });
-}
-const state = JSON.parse(fs.readFileSync(STORE_FILE, 'utf8'));
-if (!Array.isArray(state.keys)) throw new Error('Invalid storage file');
+let pool = null;
+let state = { keys: [] };
 
-function save() {
+function saveLocal() {
   const temp = STORE_FILE + '.' + process.pid + '.tmp';
   fs.writeFileSync(temp, JSON.stringify(state, null, 2), { mode: 0o600 });
   fs.renameSync(temp, STORE_FILE);
+}
+
+async function initializeStorage() {
+  if (DATABASE_URL) {
+    pool = new Pool({
+      connectionString: DATABASE_URL,
+      max: 5,
+      idleTimeoutMillis: 30000,
+      connectionTimeoutMillis: 10000
+    });
+    await pool.query(
+      'CREATE TABLE IF NOT EXISTS wrp_activation_keys (' +
+      'id TEXT PRIMARY KEY, ' +
+      'key_hash TEXT NOT NULL UNIQUE, ' +
+      'created_at TIMESTAMPTZ NOT NULL, ' +
+      'expires_at TIMESTAMPTZ NOT NULL, ' +
+      'revoked BOOLEAN NOT NULL DEFAULT FALSE, ' +
+      'device_hash TEXT)'
+    );
+    await pool.query('CREATE INDEX IF NOT EXISTS wrp_activation_keys_expires_idx ON wrp_activation_keys (expires_at)');
+    console.log('WRP storage initialized: PostgreSQL');
+    return;
+  }
+
+  fs.mkdirSync(path.dirname(STORE_FILE), { recursive: true });
+  if (!fs.existsSync(STORE_FILE)) {
+    fs.writeFileSync(STORE_FILE, JSON.stringify({ keys: [] }, null, 2), { flag: 'wx', mode: 0o600 });
+  }
+  state = JSON.parse(fs.readFileSync(STORE_FILE, 'utf8'));
+  if (!Array.isArray(state.keys)) throw new Error('Invalid storage file');
+  console.warn('WRP storage initialized: local JSON file (not durable on Render Free)');
+}
+
+function fromDatabase(row) {
+  return {
+    id: row.id,
+    keyHash: row.keyHash,
+    createdAt: new Date(row.createdAt).toISOString(),
+    expiresAt: new Date(row.expiresAt).toISOString(),
+    revoked: row.revoked,
+    deviceHash: row.deviceHash || null
+  };
+}
+
+const KEY_SELECT = 'SELECT id, key_hash AS "keyHash", created_at AS "createdAt", expires_at AS "expiresAt", revoked, device_hash AS "deviceHash" FROM wrp_activation_keys';
+
+async function listKeys() {
+  if (!pool) return state.keys;
+  const result = await pool.query(KEY_SELECT + ' ORDER BY created_at DESC');
+  return result.rows.map(fromDatabase);
+}
+
+async function createKey(item) {
+  if (!pool) {
+    state.keys.push(item);
+    saveLocal();
+    return;
+  }
+  await pool.query(
+    'INSERT INTO wrp_activation_keys (id, key_hash, created_at, expires_at, revoked, device_hash) VALUES ($1, $2, $3, $4, $5, $6)',
+    [item.id, item.keyHash, item.createdAt, item.expiresAt, item.revoked, item.deviceHash]
+  );
+}
+
+async function revokeKey(id) {
+  if (!pool) {
+    const item = state.keys.find(key => key.id === id);
+    if (!item) return null;
+    item.revoked = true;
+    saveLocal();
+    return item.id;
+  }
+  const result = await pool.query('UPDATE wrp_activation_keys SET revoked = TRUE WHERE id = $1 RETURNING id', [id]);
+  return result.rows[0] ? result.rows[0].id : null;
+}
+
+async function findKeyByHash(keyHash) {
+  if (!pool) return state.keys.find(item => constantEquals(item.keyHash, keyHash)) || null;
+  const result = await pool.query(KEY_SELECT + ' WHERE key_hash = $1 LIMIT 1', [keyHash]);
+  return result.rows[0] ? fromDatabase(result.rows[0]) : null;
+}
+
+async function bindDevice(id, deviceHash) {
+  if (!pool) {
+    const item = state.keys.find(key => key.id === id);
+    if (item && !item.deviceHash && !item.revoked && Date.now() < Date.parse(item.expiresAt)) {
+      item.deviceHash = deviceHash;
+      saveLocal();
+    }
+    return;
+  }
+  await pool.query(
+    'UPDATE wrp_activation_keys SET device_hash = $2 WHERE id = $1 AND device_hash IS NULL AND revoked = FALSE AND expires_at > NOW()',
+    [id, deviceHash]
+  );
 }
 function hmac(value) {
   return crypto.createHmac('sha256', KEY_PEPPER).update(value).digest('hex');
@@ -202,11 +295,28 @@ td,th{padding:12px 11px;border-bottom:1px solid #263750;vertical-align:middle}tb
   </section>
 </div>
 
-<p class="footer">WRP Admin Dashboard · Keep ADMIN_TOKEN private. Current backend stores key data in a local file; data may be lost if the hosting service restarts unless persistent storage is configured.</p>
+<p class="footer" id="storageInfo">Checking storage configuration…</p>
 </main>
 <script>
 const $ = id => document.getElementById(id);
 let allKeys = [];
+
+async function checkStorageMode() {
+  const el = $('storageInfo');
+  try {
+    const response = await fetch('/health', { cache: 'no-store' });
+    const data = await response.json();
+    if (!response.ok || !data.ok) throw new Error('Health check failed');
+    if (data.storage === 'postgres') {
+      el.textContent = 'Storage: PostgreSQL connected. Key records persist across service restarts and redeploys; maintain database backups and access controls.';
+    } else {
+      el.textContent = 'Storage: local JSON file. Data can be lost on Render restarts or redeploys. Configure DATABASE_URL for PostgreSQL before issuing production keys.';
+    }
+  } catch (_) {
+    el.textContent = 'Storage status could not be verified. Check the server health endpoint before issuing production keys.';
+  }
+}
+checkStorageMode();
 
 function showMessage(text, type) {
   const el = $('message');
@@ -388,7 +498,7 @@ const server = http.createServer(async (req, res) => {
   try {
     const url = new URL(req.url, 'http://localhost');
     const route = url.pathname;
-    if (route === '/health' && req.method === 'GET') return reply(res, 200, { ok: true, service: 'WRP activation backend' });
+    if (route === '/health' && req.method === 'GET') return reply(res, 200, { ok: true, service: 'WRP activation backend', storage: pool ? 'postgres' : 'local-file' });
     if (route === '/admin' && req.method === 'GET') {
       res.writeHead(200, {
         'Content-Type': 'text/html; charset=utf-8',
@@ -405,7 +515,8 @@ const server = http.createServer(async (req, res) => {
     if (route.startsWith('/api/admin/')) {
       if (!authorized(req)) return reply(res, 401, { ok: false, error: 'Invalid admin token' });
       if (route === '/api/admin/keys' && req.method === 'GET') {
-        return reply(res, 200, { ok: true, keys: state.keys.map(({ id, createdAt, expiresAt, revoked, deviceHash }) => ({
+        const keys = await listKeys();
+        return reply(res, 200, { ok: true, keys: keys.map(({ id, createdAt, expiresAt, revoked, deviceHash }) => ({
           id, createdAt, expiresAt, revoked, bound: !!deviceHash
         })) });
       }
@@ -415,15 +526,15 @@ const server = http.createServer(async (req, res) => {
         const key = 'wrp_' + crypto.randomBytes(24).toString('base64url');
         const item = { id: crypto.randomUUID(), keyHash: hmac('key:' + key), createdAt: new Date().toISOString(),
           expiresAt: new Date(Date.now() + days * 86400000).toISOString(), revoked: false, deviceHash: null };
-        state.keys.push(item); save();
+        await createKey(item);
         return reply(res, 201, { ok: true, key, id: item.id, expiresAt: item.expiresAt });
       }
       if (route === '/api/admin/keys/revoke' && req.method === 'POST') {
         const { id } = await parseBody(req);
-        const item = state.keys.find(k => k.id === id);
-        if (!item) return reply(res, 404, { ok: false, error: 'Key not found' });
-        item.revoked = true; save();
-        return reply(res, 200, { ok: true, id: item.id, revoked: true });
+        if (typeof id !== 'string' || !id) return reply(res, 400, { ok: false, error: 'Invalid key ID' });
+        const revokedId = await revokeKey(id);
+        if (!revokedId) return reply(res, 404, { ok: false, error: 'Key not found' });
+        return reply(res, 200, { ok: true, id: revokedId, revoked: true });
       }
       return reply(res, 404, { ok: false, error: 'Admin route not found' });
     }
@@ -435,13 +546,20 @@ const server = http.createServer(async (req, res) => {
         return reply(res, 400, { ok: false, error: 'Invalid activation request' });
       }
       const keyHash = hmac('key:' + key);
-      const item = state.keys.find(k => constantEquals(k.keyHash, keyHash));
+      let item = await findKeyByHash(keyHash);
       if (!item || item.revoked || Date.now() >= Date.parse(item.expiresAt))
         return reply(res, 403, { ok: false, error: 'Key invalid, revoked, or expired' });
       const deviceHash = hmac('device:' + deviceId);
       if (item.deviceHash && !constantEquals(item.deviceHash, deviceHash))
         return reply(res, 403, { ok: false, error: 'Key is bound to a different installation' });
-      if (!item.deviceHash) { item.deviceHash = deviceHash; save(); }
+      if (!item.deviceHash) {
+        await bindDevice(item.id, deviceHash);
+        item = await findKeyByHash(keyHash);
+        if (!item || item.revoked || Date.now() >= Date.parse(item.expiresAt) ||
+            !item.deviceHash || !constantEquals(item.deviceHash, deviceHash)) {
+          return reply(res, 403, { ok: false, error: 'Key is invalid, revoked, expired, or already bound' });
+        }
+      }
       return reply(res, 200, { ok: true, expiresAt: item.expiresAt });
     }
     reply(res, 404, { ok: false, error: 'Not found' });
@@ -450,4 +568,10 @@ const server = http.createServer(async (req, res) => {
     if (!res.headersSent) reply(res, 400, { ok: false, error: 'Invalid request' });
   }
 });
-server.listen(PORT, HOST, () => console.log(`WRP Backend running on ${HOST}:${PORT}`));
+initializeStorage().then(() => {
+  server.listen(PORT, HOST, () => console.log(`WRP Backend running on ${HOST}:${PORT}`));
+}).catch(async error => {
+  console.error('WRP storage initialization failed:', error.message);
+  if (pool) await pool.end().catch(() => {});
+  process.exit(1);
+});
