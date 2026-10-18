@@ -1,49 +1,114 @@
 
-name: WRP Updated APK
+name: WRP Updated APK Build
 
 on:
   workflow_dispatch:
   push:
-    branches: [main]
+    branches:
+      - main
 
 permissions:
   contents: read
 
 jobs:
   build:
+    name: Build WRP Android APK
     runs-on: ubuntu-24.04
     timeout-minutes: 35
-    steps:
-      - uses: actions/checkout@v4
 
-      - uses: actions/setup-java@v4
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Setup Java 17
+        uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: '17'
 
-      - uses: android-actions/setup-android@v3
+      - name: Setup Android SDK
+        shell: bash
+        run: |
+          set -euo pipefail
 
-      - name: Install Android SDK
-        run: sdkmanager "platforms;android-35" "build-tools;35.0.0"
+          SDK="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-/usr/local/lib/android/sdk}}"
+          echo "ANDROID_HOME=$SDK" >> "$GITHUB_ENV"
 
-      - uses: gradle/actions/setup-gradle@v4
+          if [ ! -f "$SDK/platforms/android-35/android.jar" ] || [ ! -x "$SDK/build-tools/35.0.0/aapt2" ]; then
+            "$SDK/cmdline-tools/latest/bin/sdkmanager" \
+              --sdk_root="$SDK" \
+              --install \
+              'platforms;android-35' \
+              'build-tools;35.0.0'
+          fi
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '8.9'
 
-      - name: Extract Updated Source
+      - name: Extract WRP Updated Source
+        shell: bash
         run: |
-          unzip -q WRP-Updated-Source.zip -d source
-          cp source/settings.gradle .
-          cp source/build.gradle .
-          cp source/gradle.properties .
-          cp -R source/app .
+          set -euo pipefail
 
-      - name: Build APK
-        run: gradle --no-daemon :app:assembleDebug
+          test -f WRP-Updated-Source.zip
 
-      - name: Upload APK
+          mkdir -p wrp-extracted
+
+          unzip -q WRP-Updated-Source.zip \
+            -d wrp-extracted
+
+          SOURCE="wrp-extracted"
+
+          if [ ! -f "$SOURCE/settings.gradle" ]; then
+            SOURCE=$(find wrp-extracted \
+              -name settings.gradle \
+              -type f \
+              -printf '%h\n' | head -n 1)
+          fi
+
+          test -n "$SOURCE"
+          test -f "$SOURCE/settings.gradle"
+          test -f "$SOURCE/build.gradle"
+          test -f "$SOURCE/app/build.gradle"
+          test -f "$SOURCE/app/src/main/AndroidManifest.xml"
+
+          cp "$SOURCE/settings.gradle" .
+          cp "$SOURCE/build.gradle" .
+
+          if [ -f "$SOURCE/gradle.properties" ]; then
+            cp "$SOURCE/gradle.properties" .
+          fi
+
+          cp -R "$SOURCE/app" .
+
+          echo "WRP Updated Source extracted successfully"
+
+      - name: Build Updated APK
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          gradle --no-daemon --stacktrace \
+            :app:assembleDebug
+
+      - name: Verify APK
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          APK="app/build/outputs/apk/debug/app-debug.apk"
+
+          test -s "$APK"
+          unzip -tq "$APK"
+
+          echo "APK build verified successfully"
+
+      - name: Upload Updated APK
         uses: actions/upload-artifact@v4
         with:
           name: WRP-Updated-APK
           path: app/build/outputs/apk/debug/app-debug.apk
           if-no-files-found: error
+          retention-days: 14
